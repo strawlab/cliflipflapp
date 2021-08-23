@@ -15,6 +15,9 @@ It takes an .xlsx file as input and outputs a .tex file.
 `cliflipflapp` expects the .xlsx file to have a specific format. If this is not
 true, Bad Things will happen.
 
+The output format is designed to be printed on size A4 sheets of Avery
+Zweckform© 3667 Universal Labels 48.5 x 16.9 mm.
+
 ## Installing prerequisites
 
 Tested with Ubuntu 20.04:
