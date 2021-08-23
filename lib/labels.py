@@ -5,12 +5,13 @@ import sys
 import datetime
 import string
 import random
-import requests
-# THIS IS A GOOGLE APPENGINE WORKAROUND
-import requests_toolbelt.adapters.appengine
-requests_toolbelt.adapters.appengine.monkeypatch()
-# /GAE
 import re
+import itertools
+import os
+
+import xlrd
+
+import flyboxes
 
 def replace_latex_cmd_chars(string):
     CC = [ ('\\', '\\textbackslash '),
@@ -55,6 +56,7 @@ def row2fields(row, select, override=(None,)*5):
 
 TEMPLATE_US_START = [
     "\\documentclass[letter,10pt]{article}",
+    "\\usepackage[utf8]{inputenc}",
     "\\usepackage{lmodern}",
     "\\usepackage[T1]{fontenc}",
     "\\usepackage{array}",
@@ -92,6 +94,7 @@ TEMPLATE_US_START = [
 
 TEMPLATE_A4_START = [
     "\\documentclass[a4paper,10pt]{article}",
+    "\\usepackage[utf8]{inputenc}",
     "\\usepackage{lmodern}",
     "\\usepackage[T1]{fontenc}",
     "\\usepackage{array}",
@@ -129,7 +132,7 @@ TEMPLATE_A4_START = [
 #TEMPLATE_LABEL = "\\prettylabel{%s}{%s}{%s}{%s}{%s}"
 TEMPLATE_SKIP = ["\\addresslabel{}"]
 TEMPLATE_STOP = ["\n\\end{document}"]
- 
+
 
 
 def get_tex(flies, skip=0, template='a4', repeats=1):
@@ -152,93 +155,82 @@ def get_tex(flies, skip=0, template='a4', repeats=1):
         fields = row2fields(fly, SELECT, OVERRIDE)
         LABELS.extend( [label(fields)]*repeats )
 
-    return "\n".join( TEMPLATE_START + (TEMPLATE_SKIP*skip) + LABELS + TEMPLATE_STOP ) 
+    return "\n".join( TEMPLATE_START + (TEMPLATE_SKIP*skip) + LABELS + TEMPLATE_STOP )
 
 
-def create_output(flies, template='a4', provider="lp1", skip=0, repeats=1):
+def create_output(flies, template='a4', skip=0, repeats=1):
     """Creates the output files requested by the user"""
     tex = get_tex(flies, skip=int(skip), template=template, repeats=repeats)
     try:
         tex = unicode(tex, 'utf-8')
     except:
         pass
-    if provider == "lp1":
-        content_type, data = pdf_from_sciencesoft(tex, template)
-    elif provider == "lp2":
-        content_type, data = pdf_from_mendelu(tex)
-    elif provider == "lp3":
-        content_type, data = pdf_from_halle(tex)
-    elif provider == "lp4":
-        content_type, data = 'text/plain', tex
-    else:
-        raise Exception("Unknown latex compiler '%s'" % provider)
+    content_type, data = 'text/plain', tex
     return content_type, data
 
-def pdf_from_sciencesoft(tex, template):
-    # sciencesoft.at online latex compiler
-    OPTIONS = {'src' : tex,
-               'dev' : 'pdfwrite',
-               'papersize' : 'a4',
-               'dpi' : 600,
-               'result' : 'false',
-               'template' : 'no'}
-    if template == 'us':
-        OPTIONS['papersize'] = 'letter'
-    CHARS = string.ascii_uppercase + string.digits
-    out = "LABELS_%s.pdf" % "".join( random.choice(CHARS) for _ in range(6) )
 
-    URL = 'http://sciencesoft.at/image/latexurl/%s' % out
+def doit(xlsx_content):
+    bn=None
+    ps = 'a4'
+    cf = fakecellfeed_from_ssid(xlsx_content)
+    boxes = flyboxes.get_boxes_from_cellfeed(cf)
+    flies = []
+    for box in boxes:
+        if (bn is not None) and box['name'] != bn:
+            continue
+        flies.extend(box['flies'])
 
-    r = requests.post(URL, data=OPTIONS)
-    r.raise_for_status()
-    return "application/pdf", r.content
+    # Give me my output!!!
+    content_type, data = create_output(flies, template=ps)
+    return data
 
+class YX(object):
+    def __init__(self, y, x):
+        self.row = y
+        self.col = x
 
-def pdf_from_mendelu(tex):
-    # tex.mendelu.cz online latex compiler
-    OPTIONS = {'pole' : tex,
-               'pdf' : 'PDF',
-               'preklad' : 'latex',
-               'pruchod' : 1,
-               '.cgifields' : 'komprim'}
-    URL = 'https://tex.mendelu.cz/en/'
+class CT(object):
+    def __init__(self, v):
+        self.text = v
 
-    r = requests.post(URL, data=OPTIONS)
-    r.raise_for_status()
-    return "application/pdf", r.content
+class Fakecell(object):
+    def __init__(self, y, x, v):
+        self.cell = YX(y, x)
+        self.content = CT(v)
 
+def fakecellfeed_from_ssid(xlsx_content):
+    xls_spreadsheet = xlrd.open_workbook(file_contents=xlsx_content)
+    sheet = xls_spreadsheet.sheet_by_index(0)
+    ROWS = sheet.nrows
+    COLS = sheet.ncols
+    CCC = []
+    for y, x in itertools.product(range(ROWS), range(COLS)):
+        cell = sheet.cell(y, x)
+        try:
+            cv = str(cell.value)
+        except:
+            cv = ''
+        if len(cv) > 0:
+            CCC.append(Fakecell(y+1,x+1, cv))
+    return CCC
 
-def pdf_from_halle(tex):
-    # latex.informatik,uni-halle.de
-    URL = 'http://latex.informatik.uni-halle.de/latex-online/latex.php'
+if __name__=='__main__':
+    xlsx_name = sys.argv[1]
+    suffix = '.xlsx'
+    assert xlsx_name.endswith(suffix)
 
-    # get a new id from the website
-    r = requests.get(URL)
-    r.raise_for_status()
-    iddata = r.content
-    myid = re.findall('name="id" value="(.*)"', iddata)[0]
+    head,tail = os.path.split(xlsx_name)
+    core_name = tail[:-len(suffix)]
+    tex_name = os.path.join(head,core_name + '.tex')
 
-    # request to compile the pdf
-    OPTIONS = {'quellcode' : tex,
-               'id' : myid,
-               'spw' : 1,
-               'finit': 'nothing',
-               'aformat' : 'PDF',
-               'compile' : u'\u00DCbersetzen'}
-    r = requests.post(URL, data=OPTIONS)
-    r.raise_for_status()
+    with open(xlsx_name,mode='rb') as fd:
+        xlsx_content = fd.read()
+        fd.close()
 
-    # download the created pdf
-    PDFURL = "http://latex.informatik.uni-halle.de/latex-online/temp/olatex_%s.pdf" % myid
-    r = requests.get(PDFURL)
-    r.raise_for_status()
-    data = r.content
-
-    # cleanup temporary files
-    CLEANURL = 'http://latex.informatik.uni-halle.de/latex-online/aufraeumen.php'
-    OPTIONS = {'id' : myid,
-               'spw' : 1}
-    r = requests.post(CLEANURL, data=OPTIONS)
-    r.raise_for_status()
-
-    return "application/pdf", data
+    tex_contents = doit(xlsx_content)
+    print(f'Saving output to: {tex_name}')
+    with open(tex_name,mode='w') as out_fd:
+        out_fd.write(tex_contents)
+        out_fd.close()
+    # install with "sudo apt install texlive-latex-base texlive-latex-extra"
+    print(f'Convert to pdf with: pdflatex {tex_name}')
