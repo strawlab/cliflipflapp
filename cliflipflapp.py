@@ -334,4 +334,6 @@ if __name__=='__main__':
         out_fd.write(tex_contents)
         out_fd.close()
     # install with "sudo apt install texlive-latex-base texlive-latex-extra"
-    print(f'Convert to pdf with: pdflatex {tex_name}')
+    print( 'Convert to pdf with: ')
+    print(f'   cd {head}')
+    print(f'   pdflatex {core_name}.tex')
